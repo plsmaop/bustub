@@ -69,5 +69,7 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   void CopyFirstFrom(const MappingType &item);
   page_id_t next_page_id_;
   MappingType array[0];
+
+  int keyIndex(const KeyType &key, const KeyComparator &comparator) const;
 };
 }  // namespace bustub
