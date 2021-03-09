@@ -25,7 +25,15 @@ namespace bustub {
  * max page size
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, int max_size) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, int max_size) {
+  this->SetPageType(IndexPageType::INTERNAL_PAGE);
+  this->SetPageId(page_id);
+  this->SetParentPageId(parent_id);
+  this->SetSize(0);
+  this->SetLSN(INVALID_LSN);
+  this->SetMaxSize(max_size);
+  memset(this->array, 0, max_size * sizeof(MappingType));
+}
 /*
  * Helper method to get/set the key associated with input "index"(a.k.a
  * array offset)
@@ -33,26 +41,39 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id
 INDEX_TEMPLATE_ARGUMENTS
 KeyType B_PLUS_TREE_INTERNAL_PAGE_TYPE::KeyAt(int index) const {
   // replace with your own code
-  KeyType key{};
-  return key;
+  
+  return array[index].first;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {
+  array[index].first = key;
+}
 
 /*
  * Helper method to find and return array index(or offset), so that its value
  * equals to input "value"
  */
 INDEX_TEMPLATE_ARGUMENTS
-int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const { return 0; }
+int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
+  auto sz = this->GetSize();
+  for (decltype(sz) i = 0; i < sz; ++i) {
+    if (array[i].second == value) {
+      return i;
+    }
+  }
+
+  return -1;
+}
 
 /*
  * Helper method to get the value associated with input "index"(a.k.a array
  * offset)
  */
 INDEX_TEMPLATE_ARGUMENTS
-ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const { return 0; }
+ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const {
+  return array[index].second;
+}
 
 /*****************************************************************************
  * LOOKUP
@@ -64,7 +85,17 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const { return 0; }
  */
 INDEX_TEMPLATE_ARGUMENTS
 ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyComparator &comparator) const {
-  return INVALID_PAGE_ID;
+  if (comparator(key, this->KeyAt(1)) == -1) {
+    return this->ValueAt(0);
+  }
+
+  auto ind = keyIndex(key, comparator);
+  if (ind < 0) {
+    auto pos = -(ind + 1);
+    return this->ValueAt(pos - 1);
+  }
+
+  return array[ind].second;
 }
 
 /*****************************************************************************
@@ -78,7 +109,11 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyCo
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::PopulateNewRoot(const ValueType &old_value, const KeyType &new_key,
-                                                     const ValueType &new_value) {}
+                                                     const ValueType &new_value) {
+  array[0] = { KeyType(), old_value };
+  array[1] = { new_key, new_value };
+  this->SetSize(2);
+}
 /*
  * Insert new_key & new_value pair right after the pair with its value ==
  * old_value
@@ -87,7 +122,20 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::PopulateNewRoot(const ValueType &old_value,
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, const KeyType &new_key,
                                                     const ValueType &new_value) {
-  return 0;
+  auto valueInd = ValueIndex(old_value);
+  auto sz = this->GetSize();
+  if (valueInd == -1) {
+    return sz;
+  }
+
+  if (valueInd + 1 < sz) {
+    memcpy(&array[valueInd+2], &array[valueInd+1], sizeof(MappingType));
+  }
+
+  array[valueInd+1] = { new_key, new_value };
+  this->SetSize(++sz);
+
+  return sz;
 }
 
 /*****************************************************************************
@@ -98,14 +146,35 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, 
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(BPlusTreeInternalPage *recipient,
-                                                BufferPoolManager *buffer_pool_manager) {}
+                                                BufferPoolManager *buffer_pool_manager) {
+  // last half
+  auto sz = this->GetSize();
+  auto half = sz / 2;
+  recipient->CopyNFrom(&array[half], sz - half, buffer_pool_manager);
+  memset(&array[half], 0, sizeof(MappingType) * (sz - half));
+  this->SetSize(half);
+}
 
 /* Copy entries into me, starting from {items} and copy {size} entries.
  * Since it is an internal page, for all entries (pages) moved, their parents page now changes to me.
  * So I need to 'adopt' them by changing their parent page id, which needs to be persisted with BufferPoolManger
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyNFrom(MappingType *items, int size, BufferPoolManager *buffer_pool_manager) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyNFrom(MappingType *items, int size, BufferPoolManager *buffer_pool_manager) {
+  auto sz = this->GetSize();
+  memcpy(&array[size], &array[0], sizeof(MappingType) * sz);
+  memcpy(&array[0], items, sizeof(MappingType) * size);
+  this->SetSize(sz + size);
+
+  for (int i = 0; i < size; ++i) {
+    auto &[_, rid] = items[i];
+    auto page = buffer_pool_manager->FetchPage(rid);
+    page->WLatch();
+    BPlusTreeInternalPage<KeyType, ValueType, KeyComparator> *inner = reinterpret_cast<BPlusTreeInternalPage<KeyType, ValueType, KeyComparator> *>(page->GetData());
+    inner->SetParentPageId(this->GetPageId());
+    page->WUnlatch();
+  }
+}
 
 /*****************************************************************************
  * REMOVE
@@ -116,14 +185,30 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyNFrom(MappingType *items, int size, Buf
  * NOTE: store key&value pair continuously after deletion
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index) {
+  auto sz = this->GetSize();
+
+  if (sz == 1) {
+    memset(array, 0, sizeof(MappingType));
+  } else {
+    memcpy(&array[index], &array[index+1], sizeof(MappingType) * (sz- 1));
+  }
+
+  this->SetSize(--sz);
+}
 
 /*
  * Remove the only key & value pair in internal page and return the value
  * NOTE: only call this method within AdjustRoot()(in b_plus_tree.cpp)
  */
 INDEX_TEMPLATE_ARGUMENTS
-ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() { return INVALID_PAGE_ID; }
+ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() {
+  auto sz = this->GetSize();
+  auto [_, rid] = array[0];
+  memset(array, 0, sz * sizeof(MappingType));
+  this->SetSize(--sz);
+  return rid;
+}
 /*****************************************************************************
  * MERGE
  *****************************************************************************/
@@ -136,7 +221,9 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() { return IN
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveAllTo(BPlusTreeInternalPage *recipient, const KeyType &middle_key,
-                                               BufferPoolManager *buffer_pool_manager) {}
+                                               BufferPoolManager *buffer_pool_manager) {
+  
+}
 
 /*****************************************************************************
  * REDISTRIBUTE
@@ -177,6 +264,33 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeInternalPage *re
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(const MappingType &pair, BufferPoolManager *buffer_pool_manager) {}
+
+/*
+ * Do binary search to find and return array index(or offset), so that its value
+ * equals to input "value"
+ */
+INDEX_TEMPLATE_ARGUMENTS
+int B_PLUS_TREE_INTERNAL_PAGE_TYPE::keyIndex(const KeyType &key, const KeyComparator &comparator) const {
+  // binary search
+  int l = 1, r = this->GetSize();
+  while (l < r) {
+    int mid = l + (r-l) / 2;
+    auto &[_key, _] = array[mid];
+    int result = comparator(key, _key);
+    if (result == 0) {
+      // equal
+      return mid;
+    } else if (result == -1) {
+      // less
+      r = mid;
+    } else {
+      l = mid + 1;
+    }
+  }
+
+  // not found, but should be in index l
+  return -l - 1;
+}
 
 // valuetype for internalNode should be page id_t
 template class BPlusTreeInternalPage<GenericKey<4>, page_id_t, GenericComparator<4>>;

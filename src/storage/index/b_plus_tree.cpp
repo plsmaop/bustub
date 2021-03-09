@@ -31,7 +31,7 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, BufferPoolManager *buffer_pool_manag
  * Helper function to decide whether current b+tree is empty
  */
 INDEX_TEMPLATE_ARGUMENTS
-bool BPLUSTREE_TYPE::IsEmpty() const { return true; }
+bool BPLUSTREE_TYPE::IsEmpty() const { return root_page_id_ == INVALID_PAGE_ID; }
 /*****************************************************************************
  * SEARCH
  *****************************************************************************/
@@ -42,7 +42,10 @@ bool BPLUSTREE_TYPE::IsEmpty() const { return true; }
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) {
-  return false;
+  auto page = buffer_pool_manager_->FetchPage(root_page_id_);
+  auto isExisting = this->traverse(page, key, result, transaction);
+
+  return isExisting;
 }
 
 /*****************************************************************************
@@ -56,7 +59,14 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  * keys return false, otherwise return true.
  */
 INDEX_TEMPLATE_ARGUMENTS
-bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) { return false; }
+bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) { 
+  if (IsEmpty()) {
+    StartNewTree(key, value);
+    return true;
+  }
+
+  return InsertIntoLeaf(key, value, transaction);
+}
 /*
  * Insert constant key & value pair into an empty tree
  * User needs to first ask for new page from buffer pool manager(NOTICE: throw
@@ -64,7 +74,23 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
  * tree's root page id and insert entry directly into leaf page.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {}
+void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
+  page_id_t page_id;
+  auto *page = buffer_pool_manager_->NewPage(&page_id);
+  if (page == nullptr) {
+    throw ExceptionType::OUT_OF_MEMORY;
+  }
+
+  page->WLatch();
+  auto leaf_page = reinterpret_cast<LeafPage *>(page->GetData());
+  leaf_page->Init(page_id, INVALID_PAGE_ID, leaf_max_size_);
+  page->WUnlatch();
+
+  root_page_id_ = page_id;
+  // buffer_pool_manager_->UnpinPage(page_id, true);
+
+  UpdateRootPageId(1);
+}
 
 /*
  * Insert constant key & value pair into leaf page
@@ -76,6 +102,8 @@ void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {}
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, Transaction *transaction) {
+
+
   return false;
 }
 
@@ -391,6 +419,31 @@ void BPLUSTREE_TYPE::ToString(BPlusTreePage *page, BufferPoolManager *bpm) const
     }
   }
   bpm->UnpinPage(page->GetPageId(), false);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+bool BPLUSTREE_TYPE::traverse(Page *page, const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) const {
+  page->RLatch();
+  auto isExisting = false;
+  ValueType *v = nullptr;
+
+  auto treePage = reinterpret_cast<BPlusTreePage *>(page->GetData());
+  if (treePage->IsLeafPage()) {
+    auto leaf = reinterpret_cast<LeafPage *>(treePage);
+    isExisting = leaf->Lookup(key, v, this->comparator_);
+    if (isExisting) {
+      result->emplace_back(*v);
+    }
+
+  } else {
+    auto internal = reinterpret_cast<InternalPage *>(treePage);
+    auto rid = internal->Lookup(key, this->comparator_);
+    auto childPage = buffer_pool_manager_->FetchPage(rid);
+    isExisting = this->traverse(childPage, key, result, transaction);
+  }
+
+  page->RUnlatch();
+  return isExisting;
 }
 
 template class BPlusTree<GenericKey<4>, RID, GenericComparator<4>>;
