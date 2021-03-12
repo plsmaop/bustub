@@ -14,6 +14,7 @@
 #include "common/exception.h"
 #include "common/rid.h"
 #include "storage/page/b_plus_tree_leaf_page.h"
+#include "common/logger.h"
 
 namespace bustub {
 
@@ -45,16 +46,14 @@ INDEX_TEMPLATE_ARGUMENTS
 page_id_t B_PLUS_TREE_LEAF_PAGE_TYPE::GetNextPageId() const { return next_page_id_; }
 
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::SetNextPageId(page_id_t next_page_id) {
-  next_page_id_ = next_page_id;
-}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::SetNextPageId(page_id_t next_page_id) { next_page_id_ = next_page_id; }
 
 /**
  * Helper method to find the first index i so that array[i].first >= key
  * NOTE: This method is only used when generating index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-int B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator &comparator) const { 
+int B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator &comparator) const {
   auto ind = keyIndex(key, comparator);
   if (ind < 0) {
     return -(ind + 1);
@@ -70,7 +69,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator
 INDEX_TEMPLATE_ARGUMENTS
 KeyType B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const {
   // replace with your own code
-  
+
   return array[index].first;
 }
 
@@ -102,10 +101,10 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key, const ValueType &valu
 
   ind = -(ind + 1);
   if (ind < sz) {
-    memcpy(&array[ind + 1], &array[ind], sizeof(MappingType) * (sz - ind));
+    memmove(&array[ind + 1], &array[ind], sizeof(MappingType) * (sz - ind));
   }
-  
-  array[ind] = { key, value };
+
+  array[ind] = {key, value};
 
   this->SetSize(++sz);
   return sz;
@@ -133,7 +132,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveHalfTo(BPlusTreeLeafPage *recipient) {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyNFrom(MappingType *items, int size) {
   auto sz = this->GetSize();
-  memcpy(&array[size], &array[0], sizeof(MappingType) * sz);
+  memmove(&array[size], &array[0], sizeof(MappingType) * sz);
   memcpy(&array[0], items, sizeof(MappingType) * size);
   this->SetSize(sz + size);
 }
@@ -175,7 +174,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(const KeyType &key, const 
 
   auto sz = this->GetSize();
   if (ind < sz - 1) {
-    memcpy(&array[ind], &array[ind + 1], (sz - ind - 1) * sizeof(MappingType));
+    memmove(&array[ind], &array[ind + 1], (sz - ind - 1) * sizeof(MappingType));
   }
 
   this->SetSize(--sz);
@@ -208,7 +207,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveFirstToEndOf(BPlusTreeLeafPage *recipient) {
   recipient->CopyLastFrom(array[0]);
   auto sz = this->GetSize();
-  memcpy(&array[0], &array[1], --sz * sizeof(MappingType));
+  memmove(&array[0], &array[1], --sz * sizeof(MappingType));
   this->SetSize(sz);
 }
 
@@ -219,7 +218,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyLastFrom(const MappingType &item) {
   auto sz = this->GetSize();
   array[sz] = item;
-  this->SetSize(sz+1);
+  this->SetSize(sz + 1);
 }
 
 /*
@@ -239,7 +238,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeLeafPage *recipient)
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(const MappingType &item) {
   auto sz = this->GetSize();
-  memcpy(&array[1], &array[0], sz * sizeof(MappingType));
+  memmove(&array[1], &array[0], sz * sizeof(MappingType));
   array[0] = item;
   this->SetSize(++sz);
 }
@@ -252,7 +251,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::keyIndex(const KeyType &key, const KeyComparator
   // binary search
   int l = 0, r = this->GetSize();
   while (l < r) {
-    int mid = l + (r-l) / 2;
+    int mid = l + (r - l) / 2;
     auto &[_key, _] = array[mid];
     int result = comparator(key, _key);
     if (result == 0) {
