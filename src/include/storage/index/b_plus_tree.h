@@ -14,11 +14,11 @@
 #include <string>
 #include <vector>
 
+#include "common/rwlatch.h"
 #include "concurrency/transaction.h"
 #include "storage/index/index_iterator.h"
 #include "storage/page/b_plus_tree_internal_page.h"
 #include "storage/page/b_plus_tree_leaf_page.h"
-#include "common/rwlatch.h"
 
 namespace bustub {
 
@@ -110,9 +110,7 @@ class BPlusTree {
 
   void ToString(BPlusTreePage *page, BufferPoolManager *bpm) const;
 
-  void ReleaseAllLatches(std::vector<Page *> &prevPages, bool isWLatch) {
-
-  }
+  // void ReleaseAllLatches(std::vector<Page *> &prevPages, bool isWLatch) {}
 
   // member variable
   std::string index_name_;

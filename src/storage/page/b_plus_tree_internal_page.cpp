@@ -13,8 +13,8 @@
 #include <sstream>
 
 #include "common/exception.h"
-#include "storage/page/b_plus_tree_internal_page.h"
 #include "common/logger.h"
+#include "storage/page/b_plus_tree_internal_page.h"
 
 namespace bustub {
 /*****************************************************************************

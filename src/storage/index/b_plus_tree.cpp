@@ -13,10 +13,10 @@
 #include <vector>
 
 #include "common/exception.h"
+#include "common/logger.h"
 #include "common/rid.h"
 #include "storage/index/b_plus_tree.h"
 #include "storage/page/header_page.h"
-#include "common/logger.h"
 
 namespace bustub {
 INDEX_TEMPLATE_ARGUMENTS
@@ -252,7 +252,7 @@ N *BPLUSTREE_TYPE::Split(N *node) {
   treePage->Init(pageId, node->GetParentPageId(), node->GetMaxSize());
   if (node->IsLeafPage()) {
     auto leaf = reinterpret_cast<LeafPage *>(node);
-    leaf->MoveHalfTo(reinterpret_cast<LeafPage *>(treePage));  
+    leaf->MoveHalfTo(reinterpret_cast<LeafPage *>(treePage));
     LOG_DEBUG("split leaf: %d -> %d", node->GetPageId(), treePage->GetPageId());
   } else {
     auto internal = reinterpret_cast<InternalPage *>(node);
@@ -275,11 +275,10 @@ N *BPLUSTREE_TYPE::Split(N *node) {
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &key, BPlusTreePage *new_node,
                                       Transaction *transaction) {
-
   auto parentPageId = old_node->GetParentPageId();
 
   Page *parentPage = nullptr;
-  InternalPage *parentInternalPage = nullptr; 
+  InternalPage *parentInternalPage = nullptr;
   if (old_node->IsRootPage()) {
     parentPage = buffer_pool_manager_->NewPage(&parentPageId);
     if (parentPage == nullptr) {
