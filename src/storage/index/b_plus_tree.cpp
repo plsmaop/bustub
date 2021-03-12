@@ -73,11 +73,11 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
     auto treePage = reinterpret_cast<BPlusTreePage *>(page->GetData());
     if (treePage->IsLeafPage()) {
       auto leaf = reinterpret_cast<LeafPage *>(treePage);
-      ValueType *v = nullptr;
+      ValueType v;
 
-      isExisting = leaf->Lookup(key, v, this->comparator_);
+      isExisting = leaf->Lookup(key, &v, this->comparator_);
       if (isExisting) {
-        result->emplace_back(*v);
+        result->emplace_back(v);
       }
 
       page->RUnlatch();
