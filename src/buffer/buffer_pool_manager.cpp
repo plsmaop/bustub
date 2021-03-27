@@ -56,9 +56,9 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
     page = &pages_[frame_id];
     replacer_->Pin(frame_id);
 
-    page->WLatch();
+    // page->WLatch();
     page->pin_count_++;
-    page->WUnlatch();
+    // page->WUnlatch();
 
     return page;
   }
@@ -73,7 +73,7 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
   }
 
   page = &pages_[frame_id];
-  page->WLatch();
+  // page->WLatch();
 
   page_table_.erase(page->GetPageId());
   page_table_.emplace(page_id, frame_id);
@@ -86,7 +86,7 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
   page->pin_count_ = 1;
   memset(page->data_, 0, PAGE_SIZE);
   disk_manager_->ReadPage(page_id, page->data_);
-  page->WUnlatch();
+  // page->WUnlatch();
 
   return page;
 }
@@ -99,9 +99,9 @@ bool BufferPoolManager::UnpinPageImpl(page_id_t page_id, bool is_dirty) {
   }
 
   auto p = &pages_[pgtbl_iter->second];
-  p->WLatch();
+  // p->WLatch();
   if (p->pin_count_ <= 0) {
-    p->WUnlatch();
+    // p->WUnlatch();
     return false;
   }
 
@@ -109,7 +109,7 @@ bool BufferPoolManager::UnpinPageImpl(page_id_t page_id, bool is_dirty) {
     p->is_dirty_ = true;
   }
   p->pin_count_--;
-  p->WUnlatch();
+  // p->WUnlatch();
 
   replacer_->Unpin(pgtbl_iter->second);
   return true;
@@ -124,12 +124,12 @@ bool BufferPoolManager::FlushPageImpl(page_id_t page_id) {
   }
 
   auto p = &pages_[pgtbl_iter->second];
-  p->RLatch();
+  // p->RLatch();
   if (p->IsDirty()) {
     disk_manager_->WritePage(page_id, p->GetData());
     p->is_dirty_ = false;
   }
-  p->RUnlatch();
+  // p->RUnlatch();
   return true;
 }
 
@@ -152,7 +152,7 @@ Page *BufferPoolManager::NewPageImpl(page_id_t *page_id) {
   }
 
   page = &pages_[frame_id];
-  page->WLatch();
+  // page->WLatch();
 
   if (page->IsDirty()) {
     disk_manager_->WritePage(page->GetPageId(), page->GetData());
@@ -166,7 +166,7 @@ Page *BufferPoolManager::NewPageImpl(page_id_t *page_id) {
   page->pin_count_ = 1;
   memset(page->data_, 0, PAGE_SIZE);
   disk_manager_->ReadPage(*page_id, page->data_);
-  page->WUnlatch();
+  // page->WUnlatch();
 
   return page;
 }
@@ -184,21 +184,22 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
   }
 
   auto p = &pages_[pgt_iter->second];
-  p->WLatch();
+  // p->WLatch();
   if (p->pin_count_ > 0) {
-    p->WUnlatch();
+    // p->WUnlatch();
     return false;
   }
 
   disk_manager_->DeallocatePage(page_id);
   free_list_.emplace_back(pgt_iter->second);
   page_table_.erase(page_id);
-  if (p->IsDirty()) {
+  /* if (p->IsDirty()) {
     disk_manager_->WritePage(page_id, p->GetData());
-  }
+  } */
 
   p->pin_count_ = 0;
   p->page_id_ = INVALID_PAGE_ID;
+  p->is_dirty_ = false;
   memset(p->data_, 0, PAGE_SIZE);
   return true;
 }
@@ -208,12 +209,12 @@ void BufferPoolManager::FlushAllPagesImpl() {
   std::lock_guard<std::mutex> latch(latch_);
   for (auto &[page_id, frame_id] : page_table_) {
     auto p = &pages_[frame_id];
-    p->WLatch();
+    // p->WLatch();
     if (p->IsDirty()) {
       disk_manager_->WritePage(page_id, p->GetData());
       p->is_dirty_ = false;
     }
-    p->WUnlatch();
+    // p->WUnlatch();
   }
 }
 
