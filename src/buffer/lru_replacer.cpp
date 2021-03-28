@@ -19,6 +19,7 @@ LRUReplacer::LRUReplacer(size_t num_pages) : num_pages(num_pages) {}
 LRUReplacer::~LRUReplacer() = default;
 
 bool LRUReplacer::Victim(frame_id_t *frame_id) {
+  std::lock_guard<std::mutex> latch(latch_);
   if (frame_id_list.empty()) {
     return false;
   }
@@ -31,6 +32,7 @@ bool LRUReplacer::Victim(frame_id_t *frame_id) {
 }
 
 void LRUReplacer::Pin(frame_id_t frame_id) {
+  std::lock_guard<std::mutex> latch(latch_);
   auto list_iter = list_iter_table.find(frame_id);
   if (list_iter == list_iter_table.end()) {
     return;
@@ -41,6 +43,7 @@ void LRUReplacer::Pin(frame_id_t frame_id) {
 }
 
 void LRUReplacer::Unpin(frame_id_t frame_id) {
+  std::lock_guard<std::mutex> latch(latch_);
   if (frame_id_list.size() >= num_pages) {
     return;
   }
@@ -48,7 +51,10 @@ void LRUReplacer::Unpin(frame_id_t frame_id) {
   move_to_front(frame_id);
 }
 
-size_t LRUReplacer::Size() { return frame_id_list.size(); }
+size_t LRUReplacer::Size() {
+  std::lock_guard<std::mutex> latch(latch_);
+  return frame_id_list.size();
+}
 
 void LRUReplacer::move_to_front(frame_id_t frame_id) {
   auto list_iter = list_iter_table.find(frame_id);
