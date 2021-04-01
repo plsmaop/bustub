@@ -36,7 +36,9 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, in
   this->SetLSN(INVALID_LSN);
   this->SetMaxSize(max_size);
   this->SetNextPageId(INVALID_PAGE_ID);
-  memset(this->array, 0, max_size * sizeof(MappingType));
+  for (int i = 0; i < max_size; ++i) {
+    this->array[i] = MappingType();
+  }
 }
 
 /**
@@ -100,8 +102,8 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key, const ValueType &valu
   }
 
   ind = -(ind + 1);
-  if (ind < sz) {
-    memmove(&array[ind + 1], &array[ind], sizeof(MappingType) * (sz - ind));
+  for (int i = sz; i > ind; --i) {
+    array[i] = array[i - 1];
   }
 
   array[ind] = {key, value};
@@ -122,7 +124,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveHalfTo(BPlusTreeLeafPage *recipient) {
   auto sz = this->GetSize();
   auto half = sz / 2;
   recipient->CopyNFrom(&array[half], sz - half);
-  memset(&array[half], 0, sizeof(MappingType) * (sz - half));
+  // memset(&array[half], 0, sizeof(MappingType) * (sz - half));
   this->SetSize(half);
 }
 
@@ -132,8 +134,10 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveHalfTo(BPlusTreeLeafPage *recipient) {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyNFrom(MappingType *items, int size) {
   auto sz = this->GetSize();
-  memmove(&array[size], &array[0], sizeof(MappingType) * sz);
-  memcpy(&array[0], items, sizeof(MappingType) * size);
+  for (int i = 0; i < size; ++i) {
+    array[sz + i] = items[i];
+  }
+
   this->SetSize(sz + size);
 }
 
@@ -168,13 +172,14 @@ bool B_PLUS_TREE_LEAF_PAGE_TYPE::Lookup(const KeyType &key, ValueType *value, co
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(const KeyType &key, const KeyComparator &comparator) {
   auto ind = keyIndex(key, comparator);
+  auto sz = this->GetSize();
   if (ind < 0) {
-    return -1;
+    return sz;
   }
 
-  auto sz = this->GetSize();
-  if (ind < sz - 1) {
-    memmove(&array[ind], &array[ind + 1], (sz - ind - 1) * sizeof(MappingType));
+  // memset(&array[ind], 0, sizeof(MappingType));
+  for (int i = ind; i < sz - 1; ++i) {
+    array[i] = array[i + 1];
   }
 
   this->SetSize(--sz);
@@ -193,7 +198,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient) {
   recipient->CopyNFrom(&array[0], this->GetSize());
   recipient->SetNextPageId(this->GetPageId());
 
-  memset(array, 0, this->GetSize() * sizeof(MappingType));
+  // memset(array, 0, this->GetSize() * sizeof(MappingType));
   this->SetSize(0);
 }
 
@@ -206,8 +211,11 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient) {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveFirstToEndOf(BPlusTreeLeafPage *recipient) {
   recipient->CopyLastFrom(array[0]);
-  auto sz = this->GetSize();
-  memmove(&array[0], &array[1], --sz * sizeof(MappingType));
+  auto sz = this->GetSize() - 1;
+  for (int i = 0; i < sz; ++i) {
+    array[i] = array[i + 1];
+  }
+
   this->SetSize(sz);
 }
 
@@ -228,7 +236,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeLeafPage *recipient) {
   auto sz = this->GetSize();
   recipient->CopyFirstFrom(array[--sz]);
-  memset(&array[sz], 0, sizeof(MappingType));
+  // memset(&array[sz], 0, sizeof(MappingType));
   this->SetSize(sz);
 }
 
@@ -238,9 +246,12 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeLeafPage *recipient)
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(const MappingType &item) {
   auto sz = this->GetSize();
-  memmove(&array[1], &array[0], sz * sizeof(MappingType));
+  for (int i = sz; i > 0; --i) {
+    array[i] = array[i - 1];
+  }
+
   array[0] = item;
-  this->SetSize(++sz);
+  this->SetSize(sz + 1);
 }
 
 /*
@@ -249,15 +260,18 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(const MappingType &item) {
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_LEAF_PAGE_TYPE::keyIndex(const KeyType &key, const KeyComparator &comparator) const {
   // binary search
-  int l = 0, r = this->GetSize();
+  int l = 0;
+  int r = this->GetSize();
   while (l < r) {
     int mid = l + (r - l) / 2;
-    auto &[_key, _] = array[mid];
+    auto &_key = array[mid].first;
     int result = comparator(key, _key);
     if (result == 0) {
       // equal
       return mid;
-    } else if (result == -1) {
+    }
+
+    if (result == -1) {
       // less
       r = mid;
     } else {

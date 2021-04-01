@@ -64,6 +64,6 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   MappingType array[0];
 
   int keyIndex(const KeyType &key, const KeyComparator &comparator) const;
-  void updateParentPageId(const MappingType &parent_page_id, BufferPoolManager *buffer_pool_manager) const;
+  void updateParentPageId(const MappingType &pair, BufferPoolManager *buffer_pool_manager) const;
 };
 }  // namespace bustub

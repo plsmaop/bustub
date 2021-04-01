@@ -39,6 +39,8 @@ class BPlusTree {
   using InternalPage = BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>;
   using LeafPage = BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>;
 
+  enum class Operation { READ, INSERT, DELETE };
+
  public:
   explicit BPlusTree(std::string name, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator,
                      int leaf_max_size = LEAF_PAGE_SIZE, int internal_max_size = INTERNAL_PAGE_SIZE);
@@ -110,7 +112,11 @@ class BPlusTree {
 
   void ToString(BPlusTreePage *page, BufferPoolManager *bpm) const;
 
-  // void ReleaseAllLatches(std::vector<Page *> &prevPages, bool isWLatch) {}
+  Page *FindLeafPage(const KeyType &key, Operation op, Transaction *transaction = nullptr);
+
+  void ReleaseAllWLatches(Transaction *transaction, bool isDirty);
+
+  void ReleasePrevRLatch(Page *prevPage);
 
   // member variable
   std::string index_name_;
