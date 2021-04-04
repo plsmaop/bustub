@@ -101,7 +101,7 @@ class BPlusTree {
                 int index, Transaction *transaction = nullptr);
 
   template <typename N>
-  void Redistribute(N *neighbor_node, N *node, int index);
+  void Redistribute(N *neighbor_node, N *node, bool from_left, int node_ind, InternalPage *parent);
 
   bool AdjustRoot(BPlusTreePage *node);
 
@@ -117,6 +117,8 @@ class BPlusTree {
   void ReleaseAllWLatches(Transaction *transaction, bool isDirty);
 
   void ReleasePrevRLatch(Page *prevPage);
+
+  bool ShouldRedistribute(BPlusTreePage *node, BPlusTreePage *neighbor_node) const;
 
   // member variable
   std::string index_name_;

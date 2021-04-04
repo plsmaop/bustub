@@ -216,7 +216,7 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveAllTo(BPlusTreeInternalPage *recipient, const KeyType &middle_key,
                                                BufferPoolManager *buffer_pool_manager) {
-  recipient->SetKeyAt(0, middle_key);
+  this->SetKeyAt(0, middle_key);
   auto sz = this->GetSize();
   recipient->CopyNFrom(array, sz, buffer_pool_manager);
   // memset(array, 0, sizeof(MappingType) * sz);
@@ -335,6 +335,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::updateParentPageId(const MappingType &pair,
   auto page = buffer_pool_manager->FetchPage(pageId);
   auto treePage = reinterpret_cast<BPlusTreePage *>(page->GetData());
   treePage->SetParentPageId(this->GetPageId());
+  buffer_pool_manager->UnpinPage(pageId, true);
 }
 
 // valuetype for internalNode should be page id_t

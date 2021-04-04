@@ -252,6 +252,8 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
     newInternal->SetKeyAt(0, KeyType());
     this->InsertIntoParent(parentInternalPage, middleKey, newInternal, transaction);
   }
+
+  this->buffer_pool_manager_->UnpinPage(parentPageId, true);
 }
 
 /*****************************************************************************
@@ -266,81 +268,46 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
  */
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
-  /* this->root_page_id_latch_.WLock();
+  this->root_page_id_latch_.WLock();
   if (this->IsEmpty()) {
     this->root_page_id_latch_.WUnlock();
     return;
   }
 
-  auto page = buffer_pool_manager_->FetchPage(root_page_id_);
+  auto page = this->FindLeafPage(key, Operation::DELETE, transaction);
+  auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
 
-  while (true) {
-    page->WLatch();
-    auto treePage = reinterpret_cast<BPlusTreePage *>(page->GetData());
-    auto sz = treePage->GetSize();
+  LOG_DEBUG("try delete in %d", leaf->GetPageId());
 
-    if (treePage->IsLeafPage()) {
-      auto leaf = reinterpret_cast<LeafPage *>(treePage);
-      if (sz - 1 >= leaf->GetMinSize()) {
-        for (const auto &prevPage : *transaction->GetPageSet()) {
-          if (reinterpret_cast<BPlusTreePage *>(prevPage->GetData())->IsRootPage()) {
-            root_page_id_latch_.WUnlock();
-          }
+  ValueType v;
+  auto isExisted = leaf->Lookup(key, &v, this->comparator_);
+  if (isExisted) {
+    leaf->RemoveAndDeleteRecord(key, this->comparator_);
+    // LOG_DEBUG("Add %d into deleted page set", v.GetPageId());
+    // transaction->AddIntoDeletedPageSet(v.GetPageId());
+  }
 
-          prevPage->WUnlatch();
-          this->buffer_pool_manager_->UnpinPage(prevPage->GetPageId(), false);
-        }
+  auto isCoalescedOrRedistributed = false;
+  if (leaf->GetSize() < leaf->GetMinSize()) {
+    isCoalescedOrRedistributed = true;
+    this->CoalesceOrRedistribute<LeafPage>(leaf, transaction);
+  }
 
-        transaction->GetPageSet()->clear();
-      }
+  this->ReleaseAllWLatches(transaction, isCoalescedOrRedistributed);
 
-      LOG_DEBUG("try delete in %d", leaf->GetPageId());
-      leaf->RemoveAndDeleteRecord(key, this->comparator_)
+  if (leaf->IsRootPage()) {
+    root_page_id_latch_.WUnlock();
+  }
 
-      if (leaf->GetSize() < leaf->GetMinSize()) {
-        this->CoalesceOrRedistribute<LeafPage>(leaf, transaction);
-      }
+  page->WUnlatch();
+  this->buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
 
-      for (const auto &prevPage : *transaction->GetPageSet()) {
-        if (reinterpret_cast<BPlusTreePage *>(prevPage->GetData())->IsRootPage()) {
-          root_page_id_latch_.WUnlock();
-        }
-
-        prevPage->WUnlatch();
-        this->buffer_pool_manager_->UnpinPage(prevPage->GetPageId(), false);
-      }
-
-      transaction->GetPageSet()->clear();
-
-      if (treePage->IsRootPage()) {
-        root_page_id_latch_.WUnlock();
-      }
-
-      page->WUnlatch();
-      this->buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
-      break;
+  for (const auto &deletedPageId : *transaction->GetDeletedPageSet()) {
+    if (!this->buffer_pool_manager_->DeletePage(deletedPageId)) {
+      LOG_INFO("Failed to delete page: %d", deletedPageId);
+      throw Exception(ExceptionType::INVALID, "Failed to delete page");
     }
-
-    auto internal = reinterpret_cast<InternalPage *>(treePage);
-    if (sz - 1 >= internal->GetMinSize()) {
-      for (const auto &prevPage : *transaction->GetPageSet()) {
-        if (reinterpret_cast<BPlusTreePage *>(prevPage->GetData())->IsRootPage()) {
-          root_page_id_latch_.WUnlock();
-        }
-
-        prevPage->WUnlatch();
-        this->buffer_pool_manager_->UnpinPage(prevPage->GetPageId(), false);
-      }
-
-      transaction->GetPageSet()->clear();
-    }
-
-    auto pageId = internal->Lookup(key, this->comparator_);
-    auto childPage = buffer_pool_manager_->FetchPage(pageId);
-
-    transaction->AddIntoPageSet(page);
-    page = childPage;
-  } */
+  }
 }
 
 /*
@@ -353,49 +320,102 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
 INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
 bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
+  if (node->IsRootPage()) {
+    if (this->AdjustRoot(node)) {
+      LOG_DEBUG("Add %d into deleted page set", node->GetPageId());
+      transaction->AddIntoDeletedPageSet(node->GetPageId());
+      return true;
+    }
+
+    return false;
+  }
+
   auto parentPageId = node->GetParentPageId();
   auto pageId = node->GetPageId();
 
-  Page *parentPage = nullptr;
-  InternalPage *parentInternalPage = nullptr;
-  if (node->IsRootPage()) {
-    return this->AdjustRoot(node);
-  }
-
   LOG_DEBUG("try CoalesceOrRedistribute %d", pageId);
-  parentPage = buffer_pool_manager_->FetchPage(parentPageId);
-  parentInternalPage = reinterpret_cast<InternalPage *>(parentPage->GetData());
+  auto parentPage = buffer_pool_manager_->FetchPage(parentPageId);
+  auto parentInternalPage = reinterpret_cast<InternalPage *>(parentPage->GetData());
 
   auto nodeInd = parentInternalPage->ValueIndex(pageId);
-  auto siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd == 0 ? 1 : nodeInd - 1));
-  auto siblingTreePage = reinterpret_cast<N *>(siblingPage->GetData());
-
   auto shouldRedistribute = false;
-  if ((siblingTreePage->IsLeafPage() && siblingTreePage->GetSize() + node->GetSize() < node->GetMaxSize()) ||
-      (!siblingTreePage->IsLeafPage() && siblingTreePage->GetSize() + node->GetSize() - 1 < node->GetMaxSize())) {
-    shouldRedistribute = true;
+  auto fromLeft = false;
+  decltype(parentPage) siblingPage = nullptr;
+  N *siblingTreePage = nullptr;
+
+  if (nodeInd == 0) {
+    siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(1));
+
+    siblingPage->WLatch();
+
+    siblingTreePage = reinterpret_cast<N *>(siblingPage->GetData());
+    shouldRedistribute = this->ShouldRedistribute(node, siblingTreePage);
+
+  } else if (nodeInd == parentInternalPage->GetSize() - 1) {
+    siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
+
+    siblingPage->WLatch();
+
+    siblingTreePage = reinterpret_cast<N *>(siblingPage->GetData());
+    shouldRedistribute = this->ShouldRedistribute(node, siblingTreePage);
+    fromLeft = true;
+
+  } else {
+    auto leftSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
+    auto rightSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd + 1));
+
+    leftSiblingPage->WLatch();
+    rightSiblingPage->WLatch();
+
+    auto leftSiblingTreePage = reinterpret_cast<N *>(leftSiblingPage->GetData());
+    auto rightSiblingTreePage = reinterpret_cast<N *>(rightSiblingPage->GetData());
+
+    if (this->ShouldRedistribute(node, rightSiblingTreePage)) {
+      shouldRedistribute = true;
+      siblingPage = rightSiblingPage;
+      siblingTreePage = rightSiblingTreePage;
+
+      leftSiblingPage->WUnlatch();
+      this->buffer_pool_manager_->UnpinPage(leftSiblingPage->GetPageId(), false);
+
+    } else if (this->ShouldRedistribute(node, leftSiblingTreePage)) {
+      shouldRedistribute = true;
+      fromLeft = true;
+      siblingPage = leftSiblingPage;
+      siblingTreePage = leftSiblingTreePage;
+
+      rightSiblingPage->WUnlatch();
+      this->buffer_pool_manager_->UnpinPage(rightSiblingPage->GetPageId(), false);
+
+    } else {
+      siblingPage = rightSiblingPage;
+      siblingTreePage = rightSiblingTreePage;
+
+      leftSiblingPage->WUnlatch();
+      this->buffer_pool_manager_->UnpinPage(leftSiblingPage->GetPageId(), false);
+    }
   }
 
   if (shouldRedistribute) {
     // redistribute
-    this->Redistribute<N>(siblingTreePage, node, nodeInd);
+    this->Redistribute<N>(siblingTreePage, node, fromLeft, nodeInd, parentInternalPage);
   } else {
     // coalesce
-    auto neighborNode = &siblingTreePage;
-    auto coalescedNode = &node;
-    if (nodeInd != 0) {
-      neighborNode = &node;
-      coalescedNode = &siblingTreePage;
-    } else {
-      nodeInd = 1;
+    auto neighborNode = &node;
+    auto coalescedNode = &siblingTreePage;
+    auto nodeIndToBeDeleted = nodeInd + 1;
+    if (fromLeft) {
+      neighborNode = &siblingTreePage;
+      coalescedNode = &node;
+      nodeIndToBeDeleted = nodeInd;
     }
 
-    auto shouldDelParent = this->Coalesce<N>(neighborNode, coalescedNode, &parentInternalPage, nodeInd, transaction);
-    if (shouldDelParent) {
-      transaction->AddIntoDeletedPageSet(parentInternalPage->GetPageId());
-    }
+    this->Coalesce<N>(neighborNode, coalescedNode, &parentInternalPage, nodeIndToBeDeleted, transaction);
   }
 
+  siblingPage->WUnlatch();
+  this->buffer_pool_manager_->UnpinPage(siblingPage->GetPageId(), true);
+  this->buffer_pool_manager_->UnpinPage(parentPageId, true);
   return !shouldRedistribute;
 }
 
@@ -416,23 +436,25 @@ template <typename N>
 bool BPLUSTREE_TYPE::Coalesce(N **neighbor_node, N **node,
                               BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> **parent, int index,
                               Transaction *transaction) {
-  if (node->IsLeafPage()) {
+  if ((*node)->IsLeafPage()) {
     auto leaf = reinterpret_cast<LeafPage *>(*node);
     auto leafSib = reinterpret_cast<LeafPage *>(*neighbor_node);
 
-    leafSib->MoveAllTo(leaf);
+    leaf->MoveAllTo(leafSib);
+    leafSib->SetNextPageId(leaf->GetNextPageId());
   } else {
     auto internal = reinterpret_cast<InternalPage *>(*node);
     auto internalSib = reinterpret_cast<InternalPage *>(*neighbor_node);
 
-    internalSib->MoveAllTo(internal, (*parent)->KeyAt(index), this->buffer_pool_manager_);
+    internal->MoveAllTo(internalSib, (*parent)->KeyAt(index), this->buffer_pool_manager_);
   }
 
-  transaction->AddIntoDeletedPageSet((*neighbor_node)->GetPageId());
   (*parent)->Remove(index);
+  
+  transaction->AddIntoDeletedPageSet((*node)->GetPageId());
+  LOG_DEBUG("Add %d into deleted page set", (*node)->GetPageId());
   if ((*parent)->GetSize() - 1 < (*parent)->GetMinSize()) {
-    this->CoalesceOrRedistribute<InternalPage>(*parent, transaction);
-    return true;
+    return this->CoalesceOrRedistribute<InternalPage>(*parent, transaction);
   }
 
   return false;
@@ -449,13 +471,35 @@ bool BPLUSTREE_TYPE::Coalesce(N **neighbor_node, N **node,
  */
 INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
-void BPLUSTREE_TYPE::Redistribute(N *neighbor_node, N *node, int index) {
-  if (index == 0) {
-    neighbor_node->MoveFirstToEndOf(node);
+void BPLUSTREE_TYPE::Redistribute(N *neighbor_node, N *node, bool from_left, int node_ind, InternalPage *parent) {
+  if (node->IsLeafPage()) {
+    auto neighborLeaf = reinterpret_cast<LeafPage *>(neighbor_node);
+    auto leaf = reinterpret_cast<LeafPage *>(node);
+
+    if (from_left) {
+      neighborLeaf->MoveLastToFrontOf(leaf);
+      parent->SetKeyAt(node_ind, node->KeyAt(0));
+      return;
+    }
+
+    neighborLeaf->MoveFirstToEndOf(leaf);
+    parent->SetKeyAt(node_ind + 1, neighbor_node->KeyAt(0));
     return;
   }
 
-  neighbor_node->MoveLastToFrontOf(node);
+  auto neighborInternal = reinterpret_cast<InternalPage *>(neighbor_node);
+  auto internal = reinterpret_cast<InternalPage *>(node);
+
+  if (from_left) {
+    auto newKey = neighborInternal->KeyAt(neighborInternal->GetSize() - 1);
+    neighborInternal->MoveLastToFrontOf(internal, parent->KeyAt(node_ind), this->buffer_pool_manager_);
+    parent->SetKeyAt(node_ind, newKey);
+    return;
+  }
+
+  auto newKey = neighborInternal->KeyAt(1);
+  neighborInternal->MoveFirstToEndOf(internal, parent->KeyAt(node_ind + 1), this->buffer_pool_manager_);
+  parent->SetKeyAt(node_ind + 1, newKey);
 }
 /*
  * Update root page if necessary
@@ -473,7 +517,6 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
 
   if (old_root_node->IsLeafPage()) {
     if (old_root_node->GetSize() == 0) {
-      // this->buffer_pool_manager_->DeletePage(pageId);
       this->root_page_id_ = INVALID_PAGE_ID;
       return true;
     }
@@ -484,12 +527,16 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
   if (old_root_node->GetSize() == 1) {
     auto internalPage = reinterpret_cast<InternalPage *>(old_root_node);
     auto newRootPageId = internalPage->RemoveAndReturnOnlyChild();
-    // this->buffer_pool_manager_->DeletePage(pageId);
 
     auto newRootPage = this->buffer_pool_manager_->FetchPage(newRootPageId);
     auto leafPage = reinterpret_cast<LeafPage *>(newRootPage->GetData());
     this->root_page_id_ = leafPage->GetPageId();
     leafPage->SetParentPageId(INVALID_PAGE_ID);
+
+    // set to self to avoid unlatch root_page_id_
+    old_root_node->SetParentPageId(old_root_node->GetPageId());
+
+    this->buffer_pool_manager_->UnpinPage(newRootPageId, true);
     return true;
   }
 
@@ -763,7 +810,7 @@ Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, Operation op, Transaction
       prevPage = page;
     } else {
       auto isSafe =
-          op == Operation::INSERT ? sz + 1 < internal->GetMaxSize() + 1 : sz - 1 >= internal->GetMinSize() - 1;
+          op == Operation::INSERT ? sz + 1 < internal->GetMaxSize() + 1 : sz - 1 >= internal->GetMinSize() + 1;
 
       if (isSafe) {
         this->ReleaseAllWLatches(transaction, false);
@@ -788,6 +835,7 @@ void BPLUSTREE_TYPE::ReleaseAllWLatches(Transaction *transaction, bool isDirty) 
 
     prevPage->WUnlatch();
     this->buffer_pool_manager_->UnpinPage(prevPage->GetPageId(), isDirty);
+    LOG_DEBUG("Unlatch page id: %d", prevPage->GetPageId());
   }
 
   transaction->GetPageSet()->clear();
@@ -805,6 +853,16 @@ void BPLUSTREE_TYPE::ReleasePrevRLatch(Page *prevPage) {
 
   prevPage->RUnlatch();
   this->buffer_pool_manager_->UnpinPage(prevPage->GetPageId(), false);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+bool BPLUSTREE_TYPE::ShouldRedistribute(BPlusTreePage *node, BPlusTreePage *neighbor_node) const {
+  if ((node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() > node->GetMaxSize()) ||
+      (!node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() - 1 > node->GetMaxSize())) {
+    return true;
+  }
+
+  return false;
 }
 
 template class BPlusTree<GenericKey<4>, RID, GenericComparator<4>>;
