@@ -288,7 +288,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeInternalPage *re
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(const MappingType &pair, BufferPoolManager *buffer_pool_manager) {
   auto sz = this->GetSize();
-  for (int i = sz; i > 0; ++i) {
+  for (int i = sz; i > 0; --i) {
     array[i] = array[i - 1];
   }
 

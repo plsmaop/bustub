@@ -112,7 +112,7 @@ class BPlusTree {
 
   void ToString(BPlusTreePage *page, BufferPoolManager *bpm) const;
 
-  Page *FindLeafPage(const KeyType &key, Operation op, Transaction *transaction = nullptr);
+  Page *FindLeafPage(const KeyType &key, Operation op, Transaction *transaction = nullptr, bool left_most = false);
 
   void ReleaseAllWLatches(Transaction *transaction, bool isDirty);
 
