@@ -97,10 +97,10 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
   // LOG_DEBUG("Try start new tree: %ld", key.ToString());
-  page_id_t page_id;
+  page_id_t page_id = INVALID_PAGE_ID;
   auto *page = buffer_pool_manager_->NewPage(&page_id);
   if (page == nullptr) {
-    LOG_DEBUG("OOM");
+    // LOG_DEBUG("OOM");
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -127,12 +127,12 @@ INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, Transaction *transaction) {
   // LOG_DEBUG("try find leaf for insertion");
   auto page = this->FindLeafPage(key, Operation::INSERT, transaction);
-  // LOG_DEBUG("find leaf for insertion: %d", page->GetPageId());
+  // LOG_DEBUG("find leaf for insertion: %d, pin count: %d", page->GetPageId(), page->GetPinCount());
 
   auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
   auto sz = leaf->GetSize();
   auto isDuplicated = false;
-
+  
   // LOG_DEBUG("try insert into %d", leaf->GetPageId());
   if (sz == leaf->Insert(key, value, this->comparator_)) {
     // duplicated key
@@ -173,10 +173,10 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, 
 INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
 N *BPLUSTREE_TYPE::Split(N *node) {
-  page_id_t pageId;
+  page_id_t pageId = INVALID_PAGE_ID;
   auto *page = buffer_pool_manager_->NewPage(&pageId);
   if (page == nullptr) {
-    LOG_DEBUG("OOM");
+    // LOG_DEBUG("OOM");
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -213,12 +213,14 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
                                       Transaction *transaction) {
   auto parentPageId = old_node->GetParentPageId();
 
+  // LOG_DEBUG("InsertIntoParent, %d, %d", old_node->GetPageId(), new_node->GetPageId());
+
   Page *parentPage = nullptr;
   InternalPage *parentInternalPage = nullptr;
   if (old_node->IsRootPage()) {
     parentPage = buffer_pool_manager_->NewPage(&parentPageId);
     if (parentPage == nullptr) {
-      LOG_DEBUG("OOM");
+      // LOG_DEBUG("OOM");
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -242,7 +244,7 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
   // LOG_DEBUG("try insert into parent: %d from %d and %d", parentPageId, old_node->GetPageId(), new_node->GetPageId());
   parentPage = buffer_pool_manager_->FetchPage(parentPageId);
   if (parentPage == nullptr) {
-    LOG_DEBUG("OOM for %d", parentPageId);
+    // LOG_DEBUG("OOM for %d", parentPageId);
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -285,10 +287,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
   }
 
   auto page = this->FindLeafPage(key, Operation::DELETE, transaction);
-  if (page == nullptr) {
-    return;
-  }
-
   auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
 
   // LOG_DEBUG("try delete %ld in %d", key.ToString(), leaf->GetPageId());
@@ -319,7 +317,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
 
   for (const auto &deletedPageId : *transaction->GetDeletedPageSet()) {
     this->buffer_pool_manager_->DeletePage(deletedPageId);
-
+    // LOG_DEBUG("DELETE %d", deletedPageId);
     /* if (!) {
       // LOG_INFO("Failed to delete page: %d", deletedPageId);
       throw Exception(ExceptionType::INVALID, "Failed to delete page");
@@ -355,7 +353,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   // LOG_DEBUG("try CoalesceOrRedistribute %d", pageId);
   auto parentPage = buffer_pool_manager_->FetchPage(parentPageId);
   if (parentPage == nullptr) {
-    LOG_DEBUG("OOM for %d", parentPageId);
+    // LOG_DEBUG("OOM for %d", parentPageId);
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -370,7 +368,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   if (nodeInd == 0) {
     siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(1));
     if (siblingPage == nullptr) {
-      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(1));
+      // LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -382,7 +380,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   } else if (nodeInd == parentInternalPage->GetSize() - 1) {
     siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
     if (siblingPage == nullptr) {
-      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
+      // LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -395,14 +393,14 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   } else {
     auto leftSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
     if (leftSiblingPage == nullptr) {
-      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
+      // LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
     auto rightSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd + 1));
 
     if (rightSiblingPage == nullptr) {
-      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd + 1));
+      // LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd + 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -885,6 +883,8 @@ void BPLUSTREE_TYPE::ToString(BPlusTreePage *page, BufferPoolManager *bpm) const
 INDEX_TEMPLATE_ARGUMENTS
 Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, Operation op, Transaction *transaction, bool left_most) {
   auto page = buffer_pool_manager_->FetchPage(root_page_id_);
+  // LOG_DEBUG("root page id: %d", root_page_id_);
+
   if (page == nullptr) {
     this->ReleaseRootPageIdLatch();
     throw ExceptionType::OUT_OF_MEMORY;
@@ -945,7 +945,7 @@ Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, Operation op, Transaction
         this->ReleaseAllWLatches(transaction, false);
       }
 
-      LOG_DEBUG("OOM for %d", pageId);
+      // LOG_DEBUG("OOM for %d", pageId);
       throw ExceptionType::OUT_OF_MEMORY;
     }
   }
@@ -985,15 +985,15 @@ void BPLUSTREE_TYPE::ReleasePrevRLatch(Page *prevPage) {
 
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::ShouldRedistribute(BPlusTreePage *node, BPlusTreePage *neighbor_node) const {
-  return ((node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() > node->GetMaxSize()) ||
-          (!node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() - 1 > node->GetMaxSize()));
+  return ((node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() >= node->GetMaxSize()) ||
+          (!node->IsLeafPage() && node->GetSize() + neighbor_node->GetSize() - 1 >= node->GetMaxSize()));
 }
 
 /* INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::UpdateRootPageIdForTree(page_id_t pageId, bool insertRecord) {
   root_page_id_latch_.lock();
 
-  LOG_DEBUG("old root page id: %d, new root page id: %d", root_page_id_, pageId);
+  // LOG_DEBUG("old root page id: %d, new root page id: %d", root_page_id_, pageId);
   root_page_id_ = pageId;
   UpdateRootPageId(insertRecord);
 
