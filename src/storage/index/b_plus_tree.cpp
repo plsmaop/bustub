@@ -132,7 +132,7 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, 
   auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
   auto sz = leaf->GetSize();
   auto isDuplicated = false;
-  
+
   // LOG_DEBUG("try insert into %d", leaf->GetPageId());
   if (sz == leaf->Insert(key, value, this->comparator_)) {
     // duplicated key
