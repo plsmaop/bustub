@@ -46,7 +46,7 @@ class BPlusTree {
                      int leaf_max_size = LEAF_PAGE_SIZE, int internal_max_size = INTERNAL_PAGE_SIZE);
 
   // Returns true if this B+ tree has no keys and values.
-  bool IsEmpty() const;
+  bool IsEmpty();
 
   // Insert a key-value pair into this B+ tree.
   bool Insert(const KeyType &key, const ValueType &value, Transaction *transaction = nullptr);
@@ -83,7 +83,7 @@ class BPlusTree {
   Page *FindLeafPage(const KeyType &key, bool leftMost = false);
 
  private:
-  void StartNewTree(const KeyType &key, const ValueType &value);
+  Page *StartNewTree(const KeyType &key, const ValueType &value);
 
   bool InsertIntoLeaf(const KeyType &key, const ValueType &value, Transaction *transaction = nullptr);
 
@@ -120,6 +120,14 @@ class BPlusTree {
 
   bool ShouldRedistribute(BPlusTreePage *node, BPlusTreePage *neighbor_node) const;
 
+  // void UpdateRootPageIdForTree(page_id_t pageId, bool insertRecord);
+
+  // Page *GetRootPage();
+
+  void AcquireRootPageIdLatch();
+
+  void ReleaseRootPageIdLatch();
+
   // member variable
   std::string index_name_;
   page_id_t root_page_id_;
@@ -127,7 +135,7 @@ class BPlusTree {
   KeyComparator comparator_;
   int leaf_max_size_;
   int internal_max_size_;
-  ReaderWriterLatch root_page_id_latch_;
+  std::mutex root_page_id_latch_;
 };
 
 }  // namespace bustub

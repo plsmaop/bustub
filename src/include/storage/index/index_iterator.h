@@ -25,9 +25,8 @@ class IndexIterator {
 
  public:
   // you may define your own constructor based on your member variables
-  IndexIterator(Page *start_page, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator);
-  IndexIterator(Page *start_page, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator,
-                int start_ind);
+  IndexIterator(page_id_t page_id, BufferPoolManager *buffer_pool_manager, const KeyComparator &comparator,
+                int start_ind = 0);
   ~IndexIterator();
 
   bool isEnd() const;
@@ -41,11 +40,12 @@ class IndexIterator {
   bool operator!=(const IndexIterator &itr) const;
 
  private:
+  void ReleasePage(Page *page) const;
+
   // add your own private member variables here
-  Page *cur_page_ = nullptr;
   BufferPoolManager *buffer_pool_manager_ = nullptr;
-  LeafPage *cur_leaf_ = nullptr;
   KeyComparator comparator_;
+  page_id_t cur_page_id_ = INVALID_PAGE_ID;
   int cur_ind_ = 0;
 };
 
