@@ -10,11 +10,11 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
+#include <mutex>  // NOLINT
 #include <queue>
 #include <string>
 #include <vector>
 
-#include "common/rwlatch.h"
 #include "concurrency/transaction.h"
 #include "storage/index/index_iterator.h"
 #include "storage/page/b_plus_tree_internal_page.h"
@@ -83,7 +83,7 @@ class BPlusTree {
   Page *FindLeafPage(const KeyType &key, bool leftMost = false);
 
  private:
-  Page *StartNewTree(const KeyType &key, const ValueType &value);
+  void StartNewTree(const KeyType &key, const ValueType &value);
 
   bool InsertIntoLeaf(const KeyType &key, const ValueType &value, Transaction *transaction = nullptr);
 

@@ -53,10 +53,6 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
   }
 
   auto page = this->FindLeafPage(key, Operation::READ, transaction);
-  if (page == nullptr) {
-    return false;
-  }
-
   auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
   ValueType v;
 
@@ -84,12 +80,8 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
   this->AcquireRootPageIdLatch();
   // LOG_DEBUG("Try Insert %ld", key.ToString());
   if (root_page_id_ == INVALID_PAGE_ID) {
-    auto page = this->StartNewTree(key, value);
+    this->StartNewTree(key, value);
     this->ReleaseRootPageIdLatch();
-
-    if (page == nullptr) {
-      throw ExceptionType::OUT_OF_MEMORY;
-    }
 
     return true;
   }
@@ -103,12 +95,13 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
  * tree's root page id and insert entry directly into leaf page.
  */
 INDEX_TEMPLATE_ARGUMENTS
-Page *BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
+void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
   // LOG_DEBUG("Try start new tree: %ld", key.ToString());
   page_id_t page_id;
   auto *page = buffer_pool_manager_->NewPage(&page_id);
   if (page == nullptr) {
-    return page;
+    LOG_DEBUG("OOM");
+    throw ExceptionType::OUT_OF_MEMORY;
   }
 
   auto leaf_page = reinterpret_cast<LeafPage *>(page->GetData());
@@ -120,7 +113,6 @@ Page *BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
 
   buffer_pool_manager_->UnpinPage(page_id, true);
   // LOG_DEBUG("Unlatch root page id: %d", page_id);
-  return page;
 }
 
 /*
@@ -154,6 +146,7 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, 
     auto newLeaf = this->Split<LeafPage>(leaf);
 
     this->InsertIntoParent(leaf, newLeaf->KeyAt(0), newLeaf, transaction);
+    this->buffer_pool_manager_->UnpinPage(newLeaf->GetPageId(), true);
   }
 
   this->ReleaseAllWLatches(transaction, isSplit);
@@ -183,6 +176,7 @@ N *BPLUSTREE_TYPE::Split(N *node) {
   page_id_t pageId;
   auto *page = buffer_pool_manager_->NewPage(&pageId);
   if (page == nullptr) {
+    LOG_DEBUG("OOM");
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -224,6 +218,7 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
   if (old_node->IsRootPage()) {
     parentPage = buffer_pool_manager_->NewPage(&parentPageId);
     if (parentPage == nullptr) {
+      LOG_DEBUG("OOM");
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -237,7 +232,6 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
     old_node->SetParentPageId(parentPageId);
     new_node->SetParentPageId(parentPageId);
 
-    buffer_pool_manager_->UnpinPage(new_node->GetPageId(), true);
     buffer_pool_manager_->UnpinPage(parentPage->GetPageId(), true);
 
     // LOG_DEBUG("Unlatch root page id: %d", parentPageId);
@@ -248,6 +242,7 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
   // LOG_DEBUG("try insert into parent: %d from %d and %d", parentPageId, old_node->GetPageId(), new_node->GetPageId());
   parentPage = buffer_pool_manager_->FetchPage(parentPageId);
   if (parentPage == nullptr) {
+    LOG_DEBUG("OOM for %d", parentPageId);
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -264,6 +259,7 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &ke
     auto middleKey = newInternal->KeyAt(0);
     newInternal->SetKeyAt(0, KeyType());
     this->InsertIntoParent(parentInternalPage, middleKey, newInternal, transaction);
+    this->buffer_pool_manager_->UnpinPage(newInternal->GetPageId(), true);
   }
 
   // LOG_DEBUG("%d pin count: %d", parentPage->GetPageId(), parentPage->GetPinCount());
@@ -329,6 +325,8 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction) {
       throw Exception(ExceptionType::INVALID, "Failed to delete page");
     } */
   }
+
+  transaction->GetDeletedPageSet()->clear();
 }
 
 /*
@@ -357,6 +355,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   // LOG_DEBUG("try CoalesceOrRedistribute %d", pageId);
   auto parentPage = buffer_pool_manager_->FetchPage(parentPageId);
   if (parentPage == nullptr) {
+    LOG_DEBUG("OOM for %d", parentPageId);
     throw ExceptionType::OUT_OF_MEMORY;
   }
 
@@ -371,6 +370,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   if (nodeInd == 0) {
     siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(1));
     if (siblingPage == nullptr) {
+      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -382,6 +382,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   } else if (nodeInd == parentInternalPage->GetSize() - 1) {
     siblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
     if (siblingPage == nullptr) {
+      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -394,12 +395,14 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   } else {
     auto leftSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd - 1));
     if (leftSiblingPage == nullptr) {
+      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd - 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
     auto rightSiblingPage = this->buffer_pool_manager_->FetchPage(parentInternalPage->ValueAt(nodeInd + 1));
 
     if (rightSiblingPage == nullptr) {
+      LOG_DEBUG("OOM for %d", parentInternalPage->ValueAt(nodeInd + 1));
       throw ExceptionType::OUT_OF_MEMORY;
     }
 
@@ -462,6 +465,9 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction) {
   }
 
   siblingPage->WUnlatch();
+
+  // transaction->AddIntoPageSet(siblingPage);
+
   this->buffer_pool_manager_->UnpinPage(siblingPage->GetPageId(), true);
   this->buffer_pool_manager_->UnpinPage(parentPageId, true);
   // LOG_DEBUG("Finish CoalesceOrRedistribute %d", pageId);
@@ -632,18 +638,8 @@ INDEXITERATOR_TYPE BPLUSTREE_TYPE::begin() {
   }
 
   auto page = this->FindLeafPage(KeyType(), Operation::READ, nullptr, true);
-  if (page == nullptr) {
-    return INDEXITERATOR_TYPE(INVALID_PAGE_ID, this->buffer_pool_manager_, this->comparator_);
-  }
-
-  auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
-  if (leaf->IsRootPage()) {
-    this->ReleaseRootPageIdLatch();
-  }
-
   auto pageId = page->GetPageId();
-  page->RUnlatch();
-  this->buffer_pool_manager_->UnpinPage(pageId, false);
+  this->ReleasePrevRLatch(page);
 
   return INDEXITERATOR_TYPE(pageId, this->buffer_pool_manager_, this->comparator_);
 }
@@ -662,25 +658,15 @@ INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key) {
   }
 
   auto page = this->FindLeafPage(key, Operation::READ);
-  if (page == nullptr) {
-    return INDEXITERATOR_TYPE(INVALID_PAGE_ID, this->buffer_pool_manager_, this->comparator_);
-  }
+  auto pageId = page->GetPageId();
 
   auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
-  if (leaf->IsRootPage()) {
-    this->ReleaseRootPageIdLatch();
-  }
-
-  auto pageId = page->GetPageId();
   auto ind = leaf->KeyIndex(key, this->comparator_);
-  if (ind < 0) {
-    page->RUnlatch();
-    this->buffer_pool_manager_->UnpinPage(pageId, false);
-    throw Exception(ExceptionType::INVALID, "No Such Key");
-  }
+  this->ReleasePrevRLatch(page);
 
-  page->RUnlatch();
-  this->buffer_pool_manager_->UnpinPage(pageId, false);
+  if (ind < 0) {
+    pageId = INVALID_PAGE_ID;
+  }
 
   return INDEXITERATOR_TYPE(pageId, this->buffer_pool_manager_, this->comparator_, ind);
 }
@@ -713,12 +699,8 @@ Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, bool leftMost) {
   }
 
   auto page = this->FindLeafPage(key, Operation::READ, nullptr, leftMost);
-  auto leaf = reinterpret_cast<LeafPage *>(page->GetData());
-  if (leaf->IsRootPage()) {
-    this->ReleaseRootPageIdLatch();
-  }
-
   this->ReleasePrevRLatch(page);
+
   return page;
 }
 
@@ -903,6 +885,11 @@ void BPLUSTREE_TYPE::ToString(BPlusTreePage *page, BufferPoolManager *bpm) const
 INDEX_TEMPLATE_ARGUMENTS
 Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, Operation op, Transaction *transaction, bool left_most) {
   auto page = buffer_pool_manager_->FetchPage(root_page_id_);
+  if (page == nullptr) {
+    this->ReleaseRootPageIdLatch();
+    throw ExceptionType::OUT_OF_MEMORY;
+  }
+
   decltype(page) prevPage = nullptr;
 
   while (true) {
@@ -952,6 +939,13 @@ Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, Operation op, Transaction
 
     if (page == nullptr) {
       this->ReleaseRootPageIdLatch();
+      if (op == Operation::READ) {
+        this->ReleasePrevRLatch(prevPage);
+      } else {
+        this->ReleaseAllWLatches(transaction, false);
+      }
+
+      LOG_DEBUG("OOM for %d", pageId);
       throw ExceptionType::OUT_OF_MEMORY;
     }
   }
