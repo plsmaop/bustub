@@ -166,6 +166,9 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
   // 2.   If P exists, but has a non-zero pin-count, return false. Someone is using the page.
   // 3.   Otherwise, P can be deleted. Remove P from the page table, reset its metadata and return it to the free list.
   std::lock_guard<std::mutex> latch(latch_);
+
+  disk_manager_->DeallocatePage(page_id);
+
   auto pgt_iter = page_table_.find(page_id);
   if (pgt_iter == page_table_.end()) {
     return true;
@@ -178,7 +181,6 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
     return false;
   }
 
-  disk_manager_->DeallocatePage(page_id);
   free_list_.emplace_back(pgt_iter->second);
   replacer_->Pin(pgt_iter->second);
   page_table_.erase(page_id);
