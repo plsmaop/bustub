@@ -10,8 +10,8 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
-#include <mutex>  // NOLINT
 #include <queue>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -120,13 +120,9 @@ class BPlusTree {
 
   bool ShouldRedistribute(BPlusTreePage *node, BPlusTreePage *neighbor_node) const;
 
-  // void UpdateRootPageIdForTree(page_id_t pageId, bool insertRecord);
+  void AcquireRootPageIdLatch(bool is_exclusive);
 
-  // Page *GetRootPage();
-
-  void AcquireRootPageIdLatch();
-
-  void ReleaseRootPageIdLatch();
+  void ReleaseRootPageIdLatch(bool is_exclusive);
 
   // member variable
   std::string index_name_;
@@ -135,7 +131,7 @@ class BPlusTree {
   KeyComparator comparator_;
   int leaf_max_size_;
   int internal_max_size_;
-  std::mutex root_page_id_latch_;
+  std::shared_mutex root_page_id_latch_;
 };
 
 }  // namespace bustub
